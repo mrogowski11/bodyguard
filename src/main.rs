@@ -14,6 +14,9 @@ use tower_http::trace::{self, TraceLayer};
 use tracing::Level;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod helpers;
+use helpers::{check_address_block, read_file_lines_to_vec};
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
@@ -53,17 +56,20 @@ async fn proxy(req: Request<Body>) -> Result<Response, hyper::Error> {
     tracing::trace!(?req);
 
     if let Some(host_addr) = req.uri().authority().map(|auth| auth.to_string()) {
-        tokio::task::spawn(async move {
-            match hyper::upgrade::on(req).await {
-                Ok(upgraded) => {
-                    if let Err(e) = tunnel(upgraded, host_addr).await {
-                        tracing::warn!("server io error: {}", e);
-                    };
+        if check_address_block(&host_addr) {
+            println!("This site is blocked")
+        } else {
+            tokio::task::spawn(async move {
+                match hyper::upgrade::on(req).await {
+                    Ok(upgraded) => {
+                        if let Err(e) = tunnel(upgraded, host_addr).await {
+                            tracing::warn!("server io error: {}", e);
+                        };
+                    }
+                    Err(e) => tracing::warn!("upgrade error: {}", e),
                 }
-                Err(e) => tracing::warn!("upgrade error: {}", e),
-            }
-        });
-
+            });
+        }
         Ok(Response::new(body::boxed(body::Empty::new())))
     } else {
         tracing::warn!("CONNECT host is not socket addr: {:?}", req.uri());
